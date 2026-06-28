@@ -1,0 +1,83 @@
+#pragma kernel CSMain
+
+struct GrassSampleCsContainer
+{
+    float4x4 Matrix;
+    float4 LowColor;
+    float4 HighColor;
+    int ChunkID;
+    int AtlasID;
+};
+
+struct VisibleGrassSample
+{
+    float4x4 Matrix;
+    float4 LowColor;
+    float4 HighColor;
+    int AtlasID;
+};
+
+struct GrassChunkCs
+{
+    float3 ChunkCenterPos;
+    float3 ChunkSize;
+    int GrassSamplesCount;
+    float MinY;
+    float MaxY;
+};
+int _grassSamplesCount;
+StructuredBuffer<GrassSampleCsContainer>_grassSampleContainers;
+StructuredBuffer<GrassChunkCs>_grassChunks;
+StructuredBuffer<float4>_camPlanes;
+AppendStructuredBuffer<VisibleGrassSample> _visibleGrassSamples;
+
+float PointIntersectionCheck(int planeId, int GrassChunkId, float3 signs)
+{
+    return (dot(_camPlanes[planeId].xyz,
+        _grassChunks[GrassChunkId].ChunkCenterPos+_grassChunks[GrassChunkId].ChunkSize*signs)+_camPlanes[planeId].w) >= 0.0f ? 1.0f : 0.0f;
+}
+float CheckPlaneVisibility_Bruteforce(int planeId, int GrassChunkId)
+{
+    // check if min or max point in front of plane
+    float result = PointIntersectionCheck(planeId, GrassChunkId, float3(1,1,1));
+    
+    result += PointIntersectionCheck(planeId, GrassChunkId, float3(-1,1,1));
+    result += PointIntersectionCheck(planeId, GrassChunkId, float3(1,-1,1));
+    result += PointIntersectionCheck(planeId, GrassChunkId, float3(1,1,-1));
+    
+    result += PointIntersectionCheck(planeId, GrassChunkId, float3(-1,-1,-1));
+    
+    result += PointIntersectionCheck(planeId, GrassChunkId, float3(-1,1,-1));
+    result += PointIntersectionCheck(planeId, GrassChunkId, float3(1,-1,-1));
+    result += PointIntersectionCheck(planeId, GrassChunkId, float3(-1,-1,1));
+    
+   
+    return result > 0 ? 1 : 0;
+}
+
+[numthreads(64,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    float isInFrustum = 1;
+    for (uint j = 0; j < 6; j++)
+    {
+        isInFrustum *=  CheckPlaneVisibility_Bruteforce(j, id.x);
+    }
+    if (isInFrustum == 0)
+    {
+        return;
+    }
+    
+    for (uint i = 0; i < _grassSamplesCount; i++)
+    {
+        if (_grassSampleContainers[i].ChunkID == id.x)
+        {
+            VisibleGrassSample tmp;
+            tmp.Matrix = _grassSampleContainers[i].Matrix;
+            tmp.LowColor = _grassSampleContainers[i].LowColor;
+            tmp.HighColor = _grassSampleContainers[i].HighColor;
+            tmp.AtlasID = _grassSampleContainers[i].AtlasID;
+            _visibleGrassSamples.Append(tmp);
+        }
+    }
+}
